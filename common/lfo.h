@@ -1,7 +1,7 @@
 #ifndef LFO_H
 #define	LFO_H
 
-#include "p600.h"
+#include "synth.h"
 
 typedef enum
 {
@@ -13,6 +13,7 @@ struct lfo_s
 	uint32_t noise;
 	
 	uint32_t phase;
+	int32_t speed;
 	int32_t increment;	
 	
 	uint16_t levelCV,speedCV;

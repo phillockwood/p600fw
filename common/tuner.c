@@ -4,7 +4,7 @@
 
 #include "tuner.h"
 #include "storage.h"
-#include "synth.h"
+#include "sh.h"
 #include "display.h"
 #include "storage.h"
 
@@ -13,7 +13,7 @@
 #define FF_D	0x08
 #define FF_CL	0x10 // active low
 
-#define STATUS_TIMEOUT UINT16_MAX
+#define STATUS_TIMEOUT 1000000
 #define STATUS_TIMEOUT_MAX_FAILURES 5
 
 #define TUNER_TICK 2000000.0
@@ -40,8 +40,6 @@ static struct
 
 static LOWERCODESIZE void whileTuning(void)
 {
-	synth_maintainCV(tuner.currentCV,1);
-
 	// display current osc
 	if(tuner.currentCV<pcOsc1B)
 		sevenSeg_setAscii('a','1'+tuner.currentCV-pcOsc1A);
@@ -53,9 +51,7 @@ static LOWERCODESIZE void whileTuning(void)
 	display_update(1);
 
 	// full update once in a while
-	synth_update();
-
-	synth_maintainCV(tuner.currentCV,0);
+	sh_update();
 }
 
 static void i8253Write(uint8_t a,uint8_t v)
@@ -85,29 +81,46 @@ static NOINLINE void ffMask(uint8_t set,uint8_t clear)
 	++ff_step;
 }
 
-static NOINLINE void ffWaitStatus(uint8_t status)
+static NOINLINE void ffDoTimeout(void)
+{
+	++ff_timeoutCount;
+#ifdef DEBUG
+	print("bad flip flop status : ");
+	phex(ff_step);
+	phex(io_read(0x9));
+	print(" timeout count : ");
+	phex(ff_timeoutCount);
+	print("\n");
+#endif	
+}
+
+
+static void ffWaitStatus(uint8_t status)
 {
 	uint8_t s;
-	uint16_t timeout=STATUS_TIMEOUT;
+	uint32_t timeout=STATUS_TIMEOUT;
 
 	do{
 		s=io_read(0x9);
 		--timeout;
 	}while(((s>>1)&0x01)!=status && timeout);
 
+	if (!timeout)
+		ffDoTimeout();
+}
+
+static void ffWaitCounter(uint8_t status)
+{
+	uint8_t s;
+	uint32_t timeout=STATUS_TIMEOUT;
+
+	do{
+		s=io_read(0x9);
+		--timeout;
+	}while(((s>>2)&0x01)!=status && timeout);
 
 	if (!timeout)
-	{
-		++ff_timeoutCount;
-#ifdef DEBUG
-		print("bad flip flop status : ");
-		phex(ff_step);
-		phex(s);
-		print(" timeout count : ");
-		phex(ff_timeoutCount);
-		print("\n");
-#endif	
-	}
+		ffDoTimeout();
 }
 
 static NOINLINE uint16_t getPeriod(void)
@@ -118,10 +131,14 @@ static NOINLINE uint16_t getPeriod(void)
 	c=i8253Read(0x1);
 	c|=i8253Read(0x1)<<8;
 
-	// ch1 reload 0
+		// ch1 load 0
 	i8253Write(0x1,0x00);
 	i8253Write(0x1,0x00);
-
+	
+		// ch2 load 1
+	i8253Write(0x2,0x01);
+	i8253Write(0x2,0x00);
+	
 	return UINT16_MAX-c;
 }
 
@@ -129,10 +146,10 @@ static NOINLINE uint32_t measureAudioPeriod(uint8_t periods) // in 2Mhz ticks
 {
 	uint32_t res=0;
 	
-	//
+	// display / start maintainting CVs
 	
-	synth_update();
-	synth_maintainCV(tuner.currentCV,0);
+	for(int8_t i=0;i<25;++i) // lower this and eg. filter tuning starts behaving badly
+		whileTuning();
 			
 	// prepare flip flop
 	
@@ -142,57 +159,51 @@ static NOINLINE uint32_t measureAudioPeriod(uint8_t periods) // in 2Mhz ticks
 	
 	// prepare 8253
 	
-		// ch1 load 0
-	i8253Write(0x1,0x00);
-	i8253Write(0x1,0x00);
+	getPeriod();
 	
-		// ch2 load 1
-	i8253Write(0x2,0x01);
-	i8253Write(0x2,0x00);
-	
-	// flip flop stuff //TODO: EXPLAIN
+	// flip flop stuff (CF sevice manual section 2-16)
 		
-	ffMask(CNTR_EN,0);
-	
 	while(periods)
 	{
-		ffMask(0,FF_P);
-		ffWaitStatus(0); // check
+		// init
 
-		ffMask(FF_P,0);
-		ffWaitStatus(1); // wait 
+		ffMask(CNTR_EN,0);
 
-		ffMask(FF_D,0);
-		ffWaitStatus(0); // wait
+		ffMask(FF_D,FF_P);
+		ffWaitStatus(0);
+
+		ffMask(FF_P,FF_CL);
+		ffWaitStatus(1);
+
+		// start
+		
+		ffMask(FF_CL,0);
+		ffWaitCounter(0);
 
 		ffMask(0,FF_CL);
-		ffWaitStatus(1); // check
-
 		ffMask(FF_CL,0);
-		ffWaitStatus(0); // wait
-
-		ffMask(0,FF_D);
-		ffWaitStatus(1); // wait
+		ffWaitCounter(1);
 		
-		// detect untunable osc		
+		// reset
 
-		if (ff_timeoutCount>=STATUS_TIMEOUT_MAX_FAILURES)
-			return UINT32_MAX;
-
-		// reload fake clock
+		ffMask(0,CNTR_EN|FF_D);
 		
-		ffMask(0,CNTR_EN);
-		ffMask(CNTR_EN,0);
+		// get result / display / ...
 		
 		--periods;
 
 		res+=getPeriod();
 
 		whileTuning();
-	
+
+		// detect untunable osc		
+		
+		if (ff_timeoutCount>=STATUS_TIMEOUT_MAX_FAILURES)
+		{
+			res=UINT32_MAX;
+			break;
+		}
 	}
-	
-	synth_maintainCV(tuner.currentCV,1);
 	
 	return res;
 }
@@ -217,11 +228,11 @@ static LOWERCODESIZE int8_t tuneOffset(p600CV_t cv,uint8_t nthC, uint8_t lowestN
 	{
 		if(estimate>tuner_computeCVFromNote(lowestNote,0,cv))
 		{
-			synth_setCV(cv,estimate,0);
+			sh_setCV(cv,estimate,0);
 			
 			ip=measureAudioPeriod(1<<relPrec);
 			if(ip==UINT32_MAX)
-				return -1; // filure (untunable osc)
+				return -1; // failure (untunable osc)
 			
 			p=(double)ip*pow(2.0,-relPrec);
 		}
@@ -270,13 +281,8 @@ static LOWERCODESIZE void tuneCV(p600CV_t oscCV, p600CV_t ampCV)
 
 	// open VCA
 
-	synth_setCV(ampCV,UINT16_MAX,0);
+	sh_setCV(ampCV,UINT16_MAX,0);
 	
-	// done many times, to ensure all CVs are at correct voltage
-	
-	for(i=0;i<25;++i)
-		synth_update();
-
 	// tune
 
 	if (isOsc)
@@ -308,8 +314,8 @@ static LOWERCODESIZE void tuneCV(p600CV_t oscCV, p600CV_t ampCV)
 	
 	// close VCA
 
-	synth_setCV(ampCV,0,0);
-	synth_update();
+	sh_setCV(ampCV,0,0);
+	sh_update();
 }
 
 static uint16_t extapolateUpperOctavesTunes(uint8_t oct, p600CV_t cv)
@@ -356,8 +362,10 @@ LOWERCODESIZE void tuner_init(void)
 	
 	memset(&tuner,0,sizeof(tuner));
 	
+	// theoretical base tuning
+	
 	for(j=0;j<TUNER_OCTAVE_COUNT;++j)
-		for(i=0;i<P600_VOICE_COUNT;++i)
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
 		{
 			settings.tunes[j][i+pcOsc1A]=TUNER_OSC_INIT_OFFSET+j*TUNER_OSC_INIT_SCALE;
 			settings.tunes[j][i+pcOsc1B]=TUNER_OSC_INIT_OFFSET+j*TUNER_OSC_INIT_SCALE;
@@ -371,30 +379,34 @@ LOWERCODESIZE void tuner_tuneSynth(void)
 	
 	BLOCK_INT
 	{
-		// init synth
+		// reinit tuner
+		
+		tuner_init();
+		
+		// prepare synth for tuning
 		
 		display_clear();
 		led_set(plTune,1,0);
 		
 #ifdef DEBUG
-		synth_setCV(pcMVol,20000,0);
+		sh_setCV(pcMVol,20000,0);
 #else
-		synth_setCV(pcMVol,0,0);
+		sh_setCV(pcMVol,0,0);
 #endif
 
-		synth_setGate(pgASaw,1);
-		synth_setGate(pgATri,0);
-		synth_setGate(pgBSaw,1);
-		synth_setGate(pgBTri,0);
-		synth_setGate(pgPModFA,0);
-		synth_setGate(pgPModFil,0);
-		synth_setGate(pgSync,0);
+		sh_setGate(pgASaw,0);
+		sh_setGate(pgATri,0);
+		sh_setGate(pgBSaw,0);
+		sh_setGate(pgBTri,0);
+		sh_setGate(pgPModFA,0);
+		sh_setGate(pgPModFil,0);
+		sh_setGate(pgSync,0);
 
-		synth_setCV(pcResonance,0,0);
-		synth_setCV(pcAPW,0,0);
-		synth_setCV(pcBPW,0,0);
-		synth_setCV(pcPModOscB,0,0);
-		synth_setCV(pcExtFil,0,0);
+		sh_setCV(pcResonance,0,0);
+		sh_setCV(pcAPW,0,0);
+		sh_setCV(pcBPW,0,0);
+		sh_setCV(pcPModOscB,0,0);
+		sh_setCV(pcExtFil,0,0);
 		
 		// init 8253
 			// ch 0, mode 0, access 2 bytes, binary count
@@ -408,49 +420,60 @@ LOWERCODESIZE void tuner_tuneSynth(void)
 			
 			// init
 		
-		synth_setCV(pcResonance,0,0);
-		for(i=0;i<P600_VOICE_COUNT;++i)
-			synth_setCV(pcFil1+i,UINT16_MAX,0);
+		sh_setCV(pcResonance,0,0);
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
+		{
+			sh_setCV(pcAmp1+i,0,0);
+			sh_setCV(pcFil1+i,UINT16_MAX,0);
+		}
 	
 			// A oscs
 
-		synth_setCV(pcVolA,UINT16_MAX,0);
-		synth_setCV(pcVolB,0,0);
+		sh_setGate(pgASaw,1);
 
-		for(i=0;i<P600_VOICE_COUNT;++i)
+		sh_setCV(pcVolA,UINT16_MAX,0);
+		sh_setCV(pcVolB,0,0);
+
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
 			tuneCV(pcOsc1A+i,pcAmp1+i);
 
+		sh_setGate(pgASaw,0);
+		
 			// B oscs
 
-		synth_setCV(pcVolA,0,0);
-		synth_setCV(pcVolB,UINT16_MAX,0);
+		sh_setGate(pgBSaw,1);
 
-		for(i=0;i<P600_VOICE_COUNT;++i)
+		sh_setCV(pcVolA,0,0);
+		sh_setCV(pcVolB,UINT16_MAX,0);
+
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
 			tuneCV(pcOsc1B+i,pcAmp1+i);
+
+		sh_setGate(pgBSaw,0);
 
 		// tune filters
 			
 			// init
 		
-		synth_setCV(pcVolA,0,0);
-		synth_setCV(pcVolB,0,0);
-		synth_setCV(pcResonance,UINT16_MAX,0);
+		sh_setCV(pcVolA,0,0);
+		sh_setCV(pcVolB,0,0);
+		sh_setCV(pcResonance,UINT16_MAX,0);
 
-		for(i=0;i<P600_VOICE_COUNT;++i)
-			synth_setCV(pcFil1+i,0,0);
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
+			sh_setCV(pcFil1+i,0,0);
 	
 			// filters
 		
-		for(i=0;i<P600_VOICE_COUNT;++i)
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
 			tuneCV(pcFil1+i,pcAmp1+i);
 
 		// finish
 		
-		synth_setCV(pcResonance,0,0);
-		for(i=0;i<P600_VOICE_COUNT;++i)
-			synth_setCV(pcAmp1+i,0,0);
+		sh_setCV(pcResonance,0,0);
+		for(i=0;i<SYNTH_VOICE_COUNT;++i)
+			sh_setCV(pcAmp1+i,0,0);
 		
-		synth_update();
+		sh_update();
 
 		display_clear();
 		

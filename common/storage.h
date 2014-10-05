@@ -1,9 +1,11 @@
 #ifndef STORAGE_H
 #define	STORAGE_H
 
-#include "p600.h"
+#include "synth.h"
 #include "tuner.h"
 #include "assigner.h"
+
+#define MANUAL_PRESET_PAGE ((STORAGE_SIZE/STORAGE_PAGE_SIZE)-5)
 
 typedef enum
 {
@@ -18,7 +20,7 @@ typedef enum
 	cpAmpVelocity=23,cpFilVelocity=24,
 			
 	cpModDelay=25,
-	cpVibfreq=26,cpVibAmt=27,
+	cpVibFreq=26,cpVibAmt=27,
 	cpUnisonDetune=28,
 	cpSeqArpClock=29,
 
@@ -26,6 +28,8 @@ typedef enum
 	cpCount
 } continuousParameter_t;
 
+// These start at 48, which means that MIDI hold pedal will end up at
+// offset 16, so don't use that one for a parameter.
 typedef enum
 {
 	spASaw=0,spATri=1,spASqr=2,
@@ -37,7 +41,7 @@ typedef enum
 
 	spTrackingShift=12,
 	spFilEnvExpo=13,spFilEnvSlow=14,
-	spAmpEnvExpo=15,spAmpEnvSlow=16,
+	spAmpEnvExpo=15,holdPedal=16,
 			
 	spUnison=17,
 	spAssignerPriority=18,
@@ -49,6 +53,7 @@ typedef enum
 			
 	spModwheelTarget=23,
 	spVibTarget=24,
+	spAmpEnvSlow=25,
 			
 	// /!\ this must stay last
 	spCount
@@ -61,10 +66,15 @@ struct settings_s
 	uint16_t benderMiddle;
 
 	uint16_t presetNumber;
-	enum {pbkManual=0,pbkA=1,pbkB=2} presetBank;
+	int8_t presetMode;
 	
 	int8_t midiReceiveChannel; // -1: omni / 0-15: channel 1-16
+	int8_t midiSendChannel; // 0-15: channel 1-16
 	uint8_t voiceMask;
+	
+	int8_t syncMode;
+	
+	int8_t spread;
 };
 
 struct preset_s
@@ -72,12 +82,11 @@ struct preset_s
 	uint8_t steppedParameters[spCount];
 	uint16_t continuousParameters[cpCount];
 	
-	uint8_t voicePattern[P600_VOICE_COUNT];
+	uint8_t voicePattern[SYNTH_VOICE_COUNT];
 };
 
 extern struct settings_s settings;
 extern struct preset_s currentPreset;
-extern struct preset_s manualPreset;
 extern const uint8_t steppedParametersBits[spCount];
 
 int8_t settings_load(void);
@@ -85,6 +94,9 @@ void settings_save(void);
 
 int8_t preset_loadCurrent(uint16_t number);
 void preset_saveCurrent(uint16_t number);
+
+void preset_loadDefault(int8_t makeSound);
+void settings_loadDefault(void);
 
 void storage_export(uint16_t number, uint8_t * buf, int16_t * size);
 void storage_import(uint16_t number, uint8_t * buf, int16_t size);

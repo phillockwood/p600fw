@@ -1,21 +1,8 @@
 ////////////////////////////////////////////////////////////////////////////////
-// ADSR envelope, ported from electricdruid's ENVGEN7_MOOG.ASM
+// ADSR envelope, based on electricdruid's ENVGEN7_MOOG.ASM
 ////////////////////////////////////////////////////////////////////////////////
 
 /*
-;  Programme fait par tom wiltshire http://www.electricdruid.com
-;  Pour module VCADSR, Programme original nommé ENVGEN7.ASM (premiere version).
-;  La 2ieme ver ENVGEN7B.ASM ne marchait pas.
-;  Les lignes 884 à 893 ont été ajoutées pour annuler l'effet
-;  du pot nommé TIME CV (RC2/AN6, PIN8) qui changait toute la durée
-;  de l'envelope ADSR (étirait ou écrasait.. selon voltage 0-5v
-;  présent à la patte PIN8).
-;  Les tables nommées PhaseLookupHi, PhaseLookupMid, PhaseLookupLo (lignes 1002 à 1074 ) 
-;  ont été modifiées pour suivre le graticule Moog des pots Attack, Decay, Release.
-;  de 2msec. à 10sec.
-;  Juin 2008. JPD.
-;  ---------------------------------------------------------------------
-;
 ;  This program provides a versatile envelope generator on a single chip.
 ;  It is designed as a modern version of the CEM3312 or SSM2056 ICs.
 ;  Analogue output is provided as a PWM output, which requires LP
@@ -79,6 +66,7 @@ static inline void updateStageVars(struct adsr_s * a, adsrStage_t s)
 	case sSustain:
 		a->stageAdd=0;
 		a->stageMul=a->levelCV;
+		a->stageIncrement=0;
 		break;
 	case sRelease:
 		a->stageAdd=0;
@@ -86,7 +74,9 @@ static inline void updateStageVars(struct adsr_s * a, adsrStage_t s)
 		a->stageIncrement=a->releaseIncrement;
 		break;
 	default:
-		;
+		a->stageAdd=0;
+		a->stageMul=0;
+		a->stageIncrement=0;
 	}
 }
 
@@ -105,7 +95,7 @@ static LOWERCODESIZE void updateIncrements(struct adsr_s * adsr)
 static inline uint16_t computeOutput(uint32_t phase, const uint16_t lookup[], int8_t isExp)
 {
 	if(isExp)
-		return computeShape(phase,lookup);
+		return computeShape(phase,lookup,1);
 	else
 		return phase>>8; // 20bit -> 16 bit
 }
@@ -137,22 +127,40 @@ static NOINLINE void handlePhaseOverflow(struct adsr_s * a)
 
 LOWERCODESIZE void adsr_setCVs(struct adsr_s * adsr, uint16_t atk, uint16_t dec, uint16_t sus, uint16_t rls, uint16_t lvl, uint8_t mask)
 {
-	if(mask&0x01)
+	int8_t m=mask&0x80;
+	
+	if(mask&0x01 && adsr->attackCV!=atk)
+	{
+		m=1;
 		adsr->attackCV=atk;
+	}
 	
-	if(mask&0x02)
+	if(mask&0x02 && adsr->decayCV!=dec)
+	{
+		m=1;
 		adsr->decayCV=dec;
+	}
 	
-	if(mask&0x04)
+	if(mask&0x04 && adsr->sustainCV!=sus)
+	{
+		m=1;
 		adsr->sustainCV=sus;
+	}
 	
-	if(mask&0x08)
+	if(mask&0x08 && adsr->releaseCV!=rls)
+	{
+		m=1;
 		adsr->releaseCV=rls;
+	}
 	
-	if(mask&0x10)
+	if(mask&0x10 && adsr->levelCV!=lvl)
+	{
+		m=1;
 		adsr->levelCV=lvl;
+	}
 
-	updateIncrements(adsr);
+	if(m)
+		updateIncrements(adsr);
 }
 
 void adsr_setGate(struct adsr_s * a, int8_t gate)
@@ -172,6 +180,16 @@ void adsr_setGate(struct adsr_s * a, int8_t gate)
 	}
 
 	a->gate=gate;
+}
+
+void adsr_reset(struct adsr_s * adsr)
+{
+	adsr->gate=0;
+	adsr->output=0;
+	adsr->phase=0;
+	adsr->stageLevel=0;
+	adsr->stage=sWait;
+	updateStageVars(adsr,sWait);
 }
 
 inline void adsr_setShape(struct adsr_s * adsr, int8_t isExp)

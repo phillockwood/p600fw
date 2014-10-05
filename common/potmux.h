@@ -1,7 +1,7 @@
 #ifndef POTMUX_H
 #define	POTMUX_H
 
-#include "p600.h"
+#include "synth.h"
 
 #define POTMUX_POT_COUNT 32
 
@@ -15,6 +15,7 @@ void potmux_init(void);
 
 void potmux_update(uint8_t regularPotCount);
 
+int8_t potmux_isPotZeroCentered(p600Pot_t pot);
 
 #endif	/* POTMUX_H */
 

@@ -8,7 +8,7 @@
 #include "print.h"
 #include "teensy_bootloader_hack.h"
 
-#include "p600.h"
+#include "synth.h"
 
 #define CPU_PRESCALE(n)	(CLKPR = 0x80, CLKPR = (n))
 #define CPU_16MHz       0x00
@@ -169,7 +169,7 @@ static FORCEINLINE uint8_t hardware_read(int8_t io, uint16_t addr)
 	v =(c<<7)&0x80;
 	v|=(c>>1)&0x03;
 	
-	v|=(d	 )&0x10;
+	v|=(d   )&0x10;
 	v|=(d>>2)&0x08;
 	v|=(d>>1)&0x60;
 	
@@ -182,27 +182,27 @@ static FORCEINLINE uint8_t hardware_read(int8_t io, uint16_t addr)
 	return v;
 }
 
-inline void mem_write(uint16_t address, uint8_t value)
+FORCEINLINE void mem_write(uint16_t address, uint8_t value)
 {
 	hardware_write(0,address,value);
 }
 
-inline void io_write(uint8_t address, uint8_t value)
+FORCEINLINE void io_write(uint8_t address, uint8_t value)
 {
 	hardware_write(1,address,value);
 }
 
-inline uint8_t mem_read(uint16_t address)
+FORCEINLINE uint8_t mem_read(uint16_t address)
 {
 	return hardware_read(0,address);
 }
 
-inline uint8_t io_read(uint8_t address)
+FORCEINLINE uint8_t io_read(uint8_t address)
 {
 	return hardware_read(1,address);
 }
 
-inline int8_t hardware_getNMIState(void)
+FORCEINLINE int8_t hardware_getNMIState(void)
 {
 	return !(PINC&0x10);
 }
@@ -563,7 +563,7 @@ int main(void)
 
 	// initialize synth code
 
-	p600_init();
+	synth_init();
 	
 	// all inited, enable ints and do periodical updates
 	
@@ -571,20 +571,20 @@ int main(void)
 	
 	for(;;)
 	{
-		p600_update();
+		synth_update();
 	}
 }
 
 ISR(TIMER0_COMPA_vect) 
 { 
-	// use nested interrupts, because we must still handle p600_uartInterrupt
-	// we need to ensure we won't try to recursively handle another p600_timerInterrupt!
+	// use nested interrupts, because we must still handle synth_uartInterrupt
+	// we need to ensure we won't try to recursively handle another synth_timerInterrupt!
 	
 	TIMSK0&=~(1<<OCIE0A); //Disable overflow interrupt for Timer0
 	TIFR0|=7; // Clear any pending interrupt
 	sei();
 
-	p600_timerInterrupt();
+	synth_timerInterrupt();
 
 	cli();
 	TIMSK0|=(1<<OCIE0A); //Re-enable overflow interrupt for Timer0
@@ -596,7 +596,7 @@ ISR(INT4_vect)
 ISR(TIMER2_COMPA_vect) 
 #endif
 { 
-	p600_uartInterrupt();
+	synth_uartInterrupt();
 }
 
 

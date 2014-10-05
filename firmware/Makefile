@@ -59,7 +59,7 @@ SRC = \
 	../common/display.c \
 	../common/scanner.c \
 	../common/dac.c \
-	../common/synth.c \
+	../common/sh.c \
 	../common/adsr.c \
 	../common/lfo.c \
 	../common/arp.c \
@@ -71,7 +71,8 @@ SRC = \
 	../common/import.c \
 	../common/utils.c \
 	../common/ui.c \
-	../common/p600.c
+	../common/midi.c \
+	../common/synth.c
 
 # MCU name, you MUST set this to match the board you are using
 # type "make clean" after changing this, so all files will be rebuilt
@@ -541,7 +542,7 @@ extcoff: $(TARGET).elf
 	$(OBJCOPY) -O binary -R .eeprom -R .fuse -R .lock -R .signature -R .updater -R .nrww_misc -R .bootloader $< $@
 
 %.syx: %.bin
-	$(PYTHONPATH)/python ../fw2syx/fw2syx.py $< -o $@
+	python ../fw2syx/fw2syx.py $< -o $@
 
 %.eep: %.elf
 	@echo
